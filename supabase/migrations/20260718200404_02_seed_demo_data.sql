@@ -64,6 +64,19 @@ BEGIN
   PERFORM 1 FROM users WHERE email = 'admin@mindcare.kz';
   IF FOUND THEN RETURN; END IF;
 
+
+  INSERT INTO users (id, email, password, role, full_name, phone, status, email_verified_at)
+  VALUES (gen_random_uuid(), 'dauren@gmail.kz', 'admin123', 'PSYCHOLOGIST', 'Dauren Bolat', '+7 777 777 77 77', 'ACTIVE', now_ts)
+  RETURNING id INTO psy_a;
+  INSERT INTO psychologist_profiles (user_id, education, specializations, experience_years, about, verification_status, verified_at, verified_by, submitted_at)
+  VALUES (psy_a, 'Astana IT University, software engineering, professor', ARRAY['Стресс','Учёба и выгорание'], 7,
+    'Работаю со студентами: тревога перед сессией, выгорание, сон. Веду группы поддержки.',
+    'APPROVED', now_ts, admin_id, now_ts);
+  INSERT INTO documents (owner_id, type, file_name, mime_type, size_bytes) VALUES
+    (psy_a, 'DIPLOMA', 'докторская диссертация.pdf', 'application/pdf', 480000),
+    (psy_a, 'CERTIFICATE', 'сертификат_КПТ.pdf', 'application/pdf', 220000);
+
+
   INSERT INTO users (id, email, password, role, full_name, phone, status, email_verified_at)
   VALUES (gen_random_uuid(), 'marzhan@gmail.kz', 'admin123', 'ADMIN', 'Маржан Омар', '+7 777 777 77 77', 'ACTIVE', now_ts)
   RETURNING id INTO psy_a;
