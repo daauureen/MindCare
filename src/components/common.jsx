@@ -40,7 +40,7 @@ export function Profile({ me, go, logout, extra }) {
       <Top title="Профиль" />
       <div className="body stack">
         <div className="card">
-          <h3>{me.fullName}</h3>
+          <h3>{me.full_name}</h3>
           <p className="tiny" style={{ marginTop: 6 }}>{me.email}</p>
           <p className="tiny">{{ STUDENT: "Студент", PSYCHOLOGIST: "Психолог", ADMIN: "Администратор" }[me.role]}</p>
         </div>

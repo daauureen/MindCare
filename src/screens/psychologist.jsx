@@ -1,22 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { uid, nowISO, fmt, kb, CATEGORIES, DISCLAIMER, DOC_LABEL, hoursLeft } from '../lib/utils.js';
+import { uid, nowISO, fmt, CATEGORIES, DISCLAIMER, DOC_LABEL, hoursLeft } from '../lib/utils.js';
 import { Field, Area, Top, Empty, ScoreScale, Profile } from '../components/common.jsx';
 import { DocUploader } from '../components/documents.jsx';
+import { saveTest, setTestStatus, setAttemptReview, markAttemptViewed, updateProfile, updateProfileDocuments } from '../lib/db.js';
 
-// Кабинет психолога: верификация, конструктор тестов, полученные результаты
+// Кабинет психолога: верификация, конструктор тестов, полученные результаты.
+// Данные в Supabase; после каждой мутации — reload() снимка.
 
-export function PsychApp({ me, db, commit, route, go, notify, logout }) {
-  const status = me.profile?.verificationStatus;
-  if (status !== "APPROVED") return <PendingScreen me={me} db={db} commit={commit} logout={logout} notify={notify} />;
+export function PsychApp({ me, db, reload, route, go, notify, logout }) {
+  const status = me.profile?.verification_status;
+  if (status !== "APPROVED") return <PendingScreen me={me} reload={reload} logout={logout} notify={notify} />;
 
-  const myTests = db.tests.filter((t) => t.authorId === me.id);
-  const results = db.attempts.filter((a) => a.psychologistId === me.id && a.shared);
+  const myTests = db.tests.filter((t) => t.author_id === me.id);
+  const results = db.attempts.filter((a) => a.psychologist_id === me.id && a.shared);
 
   let content;
-  if (route.n === "editor") content = <TestEditor me={me} db={db} commit={commit} testId={route.id} go={go} notify={notify} />;
-  else if (route.n === "result-detail") content = <ResultDetail me={me} db={db} commit={commit} id={route.id} go={go} notify={notify} />;
+  if (route.n === "editor") content = <TestEditor me={me} reload={reload} testId={route.id} go={go} notify={notify} db={db} />;
+  else if (route.n === "result-detail") content = <ResultDetail me={me} db={db} reload={reload} id={route.id} go={go} notify={notify} />;
   else if (route.n === "results") content = <ResultsList results={results} go={go} />;
-  else if (route.n === "tests") content = <MyTests tests={myTests} db={db} commit={commit} me={me} go={go} notify={notify} />;
+  else if (route.n === "tests") content = <MyTests tests={myTests} reload={reload} go={go} notify={notify} />;
   else if (route.n === "profile") content = <Profile me={me} go={go} logout={logout} />;
   else content = <PsychHome me={me} tests={myTests} results={results} go={go} />;
 
@@ -33,29 +35,29 @@ export function PsychApp({ me, db, commit, route, go, notify, logout }) {
   );
 }
 
-export function PendingScreen({ me, db, commit, logout, notify }) {
+export function PendingScreen({ me, reload, logout, notify }) {
   const p = me.profile;
-  const s = p.verificationStatus;
+  const s = p.verification_status;
   const [docs, setDocs] = useState(p.documents || []);
   const [editing, setEditing] = useState(false);
 
-  const saveDocs = (next) => {
+  const saveDocs = async (next) => {
     setDocs(next);
-    commit({ ...db, users: db.users.map((u) => (u.id === me.id ? { ...u, profile: { ...u.profile, documents: next } } : u)) });
+    await updateProfileDocuments(me.id, next);
+    await reload();
   };
 
-  const resubmit = () => {
-    commit({
-      ...db,
-      users: db.users.map((u) => u.id === me.id
-        ? { ...u, profile: { ...u.profile, documents: docs, verificationStatus: "PENDING", submittedAt: nowISO(), rejectionReason: null, adminComment: null } }
-        : u),
+  const resubmit = async () => {
+    await updateProfile(me.id, {
+      documents: docs, verification_status: 'PENDING', submitted_at: nowISO(),
+      rejection_reason: null, admin_comment: null,
     });
     setEditing(false);
+    await reload();
     notify("Заявка отправлена повторно");
   };
 
-  const left = hoursLeft(p.submittedAt || nowISO());
+  const left = hoursLeft(p.submitted_at || new Date().toISOString());
 
   return (
     <div className="body stack" style={{ paddingTop: 40 }}>
@@ -69,7 +71,7 @@ export function PendingScreen({ me, db, commit, logout, notify }) {
           <div className="card">
             <div className="eyebrow">Осталось примерно</div>
             <p style={{ fontFamily: "Spectral, serif", fontSize: 40, lineHeight: 1.1, marginTop: 4 }}>{left} ч</p>
-            <p className="tiny">Отправлено {fmt(p.submittedAt || nowISO())}. Решение придёт уведомлением на этот экран.</p>
+            <p className="tiny">Отправлено {fmt(p.submitted_at)}. Решение придёт уведомлением на этот экран.</p>
           </div>
         </>
       )}
@@ -79,7 +81,7 @@ export function PendingScreen({ me, db, commit, logout, notify }) {
           <span className="tag warn">Нужны документы</span>
           <h1>Администратор запросил документы</h1>
           <div className="card"><div className="eyebrow">Комментарий</div>
-            <p style={{ marginTop: 8, fontSize: 14 }}>{p.adminComment}</p></div>
+            <p style={{ marginTop: 8, fontSize: 14 }}>{p.admin_comment}</p></div>
           <p className="muted">Догрузите то, что просят, и отправьте заявку снова — на повторную проверку тоже отводится 24 часа.</p>
         </>
       )}
@@ -89,7 +91,7 @@ export function PendingScreen({ me, db, commit, logout, notify }) {
           <span className="tag warn">Отклонено</span>
           <h1>Заявка отклонена</h1>
           <div className="card"><div className="eyebrow">Причина</div>
-            <p style={{ marginTop: 8, fontSize: 14 }}>{p.rejectionReason}</p></div>
+            <p style={{ marginTop: 8, fontSize: 14 }}>{p.rejection_reason}</p></div>
           <p className="muted">Вы можете исправить документы и подать заявку заново.</p>
         </>
       )}
@@ -102,8 +104,8 @@ export function PendingScreen({ me, db, commit, logout, notify }) {
 
       {!editing && docs.map((d) => (
         <div key={d.id} className="card">
-          <p style={{ fontSize: 14 }}>{d.fileName}</p>
-          <p className="tiny">{DOC_LABEL[d.type] || d.type}{d.size ? ` · ${kb(d.size)}` : ""}</p>
+          <p style={{ fontSize: 14 }}>{d.file_name || d.fileName}</p>
+          <p className="tiny">{DOC_LABEL[d.type] || d.type}{(d.size_bytes || d.size) ? ` · ${(d.size_bytes || d.size) > 1024 * 1024 ? ((d.size_bytes || d.size) / 1024 / 1024).toFixed(1) + " МБ" : Math.round((d.size_bytes || d.size) / 1024) + " КБ"}` : ""}</p>
         </div>
       ))}
 
@@ -123,11 +125,11 @@ export function PendingScreen({ me, db, commit, logout, notify }) {
 }
 
 export function PsychHome({ me, tests, results, go }) {
-  const fresh = results.filter((r) => r.reviewStatus === "NEW").length;
+  const fresh = results.filter((r) => r.review_status === "NEW").length;
   return (
     <>
       <div className="top"><div style={{ flex: 1 }}>
-        <div className="eyebrow">Кабинет психолога</div><h2 style={{ marginTop: 4 }}>{me.fullName}</h2></div></div>
+        <div className="eyebrow">Кабинет психолога</div><h2 style={{ marginTop: 4 }}>{me.full_name}</h2></div></div>
       <div className="body stack">
         <button className="card" style={{ width: "100%", textAlign: "left", cursor: "pointer" }} onClick={() => go("results")}>
           <div className="eyebrow">Новых результатов</div>
@@ -145,9 +147,10 @@ export function PsychHome({ me, tests, results, go }) {
   );
 }
 
-export function MyTests({ tests, db, commit, me, go, notify }) {
-  const setStatus = (id, status) => {
-    commit({ ...db, tests: db.tests.map((t) => t.id === id ? { ...t, status, publishedAt: status === "PUBLISHED" ? nowISO() : t.publishedAt } : t) });
+export function MyTests({ tests, reload, go, notify }) {
+  const setStatus = async (id, status) => {
+    await setTestStatus(id, status);
+    await reload();
     notify(status === "PUBLISHED" ? "Тест опубликован" : "Тест в архиве");
   };
   return (
@@ -164,7 +167,7 @@ export function MyTests({ tests, db, commit, me, go, notify }) {
               </span>
             </div>
             <p className="tiny" style={{ marginTop: 8 }}>{t.category} · {t.questions.length} вопросов</p>
-            {t.hiddenReason && <p className="tiny" style={{ color: "var(--ochre)", marginTop: 6 }}>Причина: {t.hiddenReason}</p>}
+            {t.hidden_reason && <p className="tiny" style={{ color: "var(--ochre)", marginTop: 6 }}>Причина: {t.hidden_reason}</p>}
             <div className="row" style={{ marginTop: 12 }}>
               <button className="btn quiet sm" onClick={() => go("editor", { id: t.id })}>Редактировать</button>
               {t.status === "DRAFT" && <button className="btn sm" onClick={() => setStatus(t.id, "PUBLISHED")}>Опубликовать</button>}
@@ -177,15 +180,17 @@ export function MyTests({ tests, db, commit, me, go, notify }) {
   );
 }
 
-export function TestEditor({ me, db, commit, testId, go, notify }) {
+export function TestEditor({ me, reload, testId, go, notify, db }) {
   const existing = db.tests.find((t) => t.id === testId);
   const [t, setT] = useState(
     existing || {
       id: uid(), authorId: me.id, title: "", description: "", category: CATEGORIES[0], instruction: "",
-      minutes: 5, disclaimer: DISCLAIMER, status: "DRAFT", createdAt: nowISO(), questions: [], ranges: [],
+      minutes: 5, disclaimer: DISCLAIMER, status: "DRAFT", questions: [], ranges: [],
     }
   );
   const [step, setStep] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
   const set = (k) => (e) => setT({ ...t, [k]: e.target.value });
 
   const maxScore = t.questions.reduce((s, q) => s + Math.max(0, ...q.options.map((o) => Number(o.score) || 0)), 0);
@@ -197,11 +202,21 @@ export function TestEditor({ me, db, commit, testId, go, notify }) {
   const addRange = () => setT({ ...t, ranges: [...t.ranges, { id: uid(), min: 0, max: maxScore, title: "", text: "", rec: "" }] });
   const updRange = (rid, patch) => setT({ ...t, ranges: t.ranges.map((r) => r.id === rid ? { ...r, ...patch } : r) });
 
-  const save = (status) => {
-    const clean = { ...t, status, questions: t.questions.map((q) => ({ ...q, options: q.options.map((o) => ({ ...o, score: Number(o.score) || 0 })) })), ranges: t.ranges.map((r) => ({ ...r, min: Number(r.min) || 0, max: Number(r.max) || 0 })), minutes: Number(t.minutes) || 5, publishedAt: status === "PUBLISHED" ? nowISO() : t.publishedAt };
-    commit({ ...db, tests: existing ? db.tests.map((x) => x.id === t.id ? clean : x) : [clean, ...db.tests] });
-    notify(status === "PUBLISHED" ? "Тест опубликован" : "Черновик сохранён");
-    go("tests");
+  const save = async (status) => {
+    setBusy(true); setErr("");
+    try {
+      const clean = {
+        ...t, status,
+        questions: t.questions.map((q) => ({ ...q, options: q.options.map((o) => ({ ...o, score: Number(o.score) || 0 })) })),
+        ranges: t.ranges.map((r) => ({ ...r, min: Number(r.min) || 0, max: Number(r.max) || 0 })),
+        minutes: Number(t.minutes) || 5,
+      };
+      await saveTest(clean, { isNew: !existing });
+      await reload();
+      notify(status === "PUBLISHED" ? "Тест опубликован" : "Черновик сохранён");
+      go("tests");
+    } catch (e) { setErr(e.message || "Не удалось сохранить"); }
+    setBusy(false);
   };
 
   const publishErrors = [];
@@ -273,9 +288,10 @@ export function TestEditor({ me, db, commit, testId, go, notify }) {
             ))}
             <button className="btn ghost" onClick={addRange}>+ Диапазон</button>
             <div className="divider" />
+            {err && <p className="tiny" style={{ color: "var(--ochre)" }}>{err}</p>}
             {publishErrors.length > 0 && <p className="tiny" style={{ color: "var(--ochre)" }}>Для публикации: {publishErrors.join(", ")}.</p>}
-            <button className="btn" disabled={publishErrors.length > 0} onClick={() => save("PUBLISHED")}>Опубликовать</button>
-            <button className="btn quiet" onClick={() => save("DRAFT")}>Сохранить черновик</button>
+            <button className="btn" disabled={publishErrors.length > 0 || busy} onClick={() => save("PUBLISHED")}>{busy ? "Сохраняем…" : "Опубликовать"}</button>
+            <button className="btn quiet" disabled={busy} onClick={() => save("DRAFT")}>Сохранить черновик</button>
           </>
         )}
       </div>
@@ -285,7 +301,7 @@ export function TestEditor({ me, db, commit, testId, go, notify }) {
 
 export function ResultsList({ results, go }) {
   const [filter, setFilter] = useState(null);
-  const list = results.filter((r) => !filter || r.reviewStatus === filter);
+  const list = results.filter((r) => !filter || r.review_status === filter);
   const L = { NEW: "новые", VIEWED: "просмотренные", NEEDS_CONSULT: "нужна консультация", CLOSED: "закрытые" };
   return (
     <>
@@ -300,9 +316,9 @@ export function ResultsList({ results, go }) {
         {list.length === 0 && <Empty>Здесь появятся результаты студентов,<br />которые согласились их отправить.</Empty>}
         {list.map((a) => (
           <button key={a.id} className="card" style={{ textAlign: "left", width: "100%", cursor: "pointer" }} onClick={() => go("result-detail", { id: a.id })}>
-            <div className="between"><h3>{a.studentName}</h3>
-              <span className={"tag " + (a.reviewStatus === "NEEDS_CONSULT" ? "warn" : a.reviewStatus === "NEW" ? "" : "grey")}>{L[a.reviewStatus]}</span></div>
-            <p className="tiny" style={{ marginTop: 8 }}>{a.testTitle} · {a.totalScore} баллов · {fmt(a.sharedAt)}</p>
+            <div className="between"><h3>{a.student_name}</h3>
+              <span className={"tag " + (a.review_status === "NEEDS_CONSULT" ? "warn" : a.review_status === "NEW" ? "" : "grey")}>{L[a.review_status]}</span></div>
+            <p className="tiny" style={{ marginTop: 8 }}>{a.test_title} · {a.total_score} баллов · {fmt(a.shared_at)}</p>
           </button>
         ))}
       </div>
@@ -310,42 +326,42 @@ export function ResultsList({ results, go }) {
   );
 }
 
-export function ResultDetail({ me, db, commit, id, go, notify }) {
+export function ResultDetail({ me, db, reload, id, go, notify }) {
   const a = db.attempts.find((x) => x.id === id);
-  const test = db.tests.find((t) => t.id === a?.testId);
+  const test = db.tests.find((t) => t.id === a?.test_id);
   const [note, setNote] = useState(a?.note || "");
   useEffect(() => {
-    if (a && a.reviewStatus === "NEW") {
-      commit({
-        ...db,
-        attempts: db.attempts.map((x) => x.id === a.id ? { ...x, reviewStatus: "VIEWED", reviewedAt: nowISO() } : x),
-        notifications: [{ id: uid(), userId: a.studentId, type: "RESULT_VIEWED", title: "Психолог посмотрел ваш результат", createdAt: nowISO(), read: false }, ...db.notifications],
-      });
+    if (a && a.review_status === "NEW") {
+      (async () => {
+        await markAttemptViewed(a.id, a.student_id);
+        await reload();
+      })();
     }
   }, []);
   if (!a || !test) return <Empty>Результат недоступен</Empty>;
-  if (a.psychologistId !== me.id || !a.shared) return <Empty>У вас нет доступа к этому результату.</Empty>;
-  const range = test.ranges.find((r) => r.id === a.rangeId);
+  if (a.psychologist_id !== me.id || !a.shared) return <Empty>У вас нет доступа к этому результату.</Empty>;
+  const range = test.ranges.find((r) => r.id === a.range_id);
 
-  const setStatus = (s) => {
-    commit({ ...db, attempts: db.attempts.map((x) => x.id === a.id ? { ...x, reviewStatus: s, note } : x) });
+  const setStatus = async (s) => {
+    await setAttemptReview(a.id, s, note);
+    await reload();
     notify("Статус обновлён");
   };
 
   return (
     <>
-      <Top title={a.studentName} onBack={() => go("results")} />
+      <Top title={a.student_name} onBack={() => go("results")} />
       <div className="body stack">
-        <div className="eyebrow">{a.testTitle} · отправлено {fmt(a.sharedAt)}</div>
+        <div className="eyebrow">{a.test_title} · отправлено {fmt(a.shared_at)}</div>
         <h1>{range?.title}</h1>
-        <ScoreScale ranges={test.ranges} score={a.totalScore} activeId={a.rangeId} />
+        <ScoreScale ranges={test.ranges} score={a.total_score} activeId={a.range_id} />
         <div className="divider" />
         <div className="eyebrow">Ответы</div>
         {a.answers.map((ans, i) => (
           <div key={i} className="card">
-            <p className="tiny">{i + 1}. {ans.questionText}</p>
+            <p className="tiny">{i + 1}. {ans.question_text}</p>
             <div className="between" style={{ marginTop: 6 }}>
-              <p style={{ fontSize: 14 }}>{ans.optionText}</p>
+              <p style={{ fontSize: 14 }}>{ans.option_text}</p>
               <span className="tag grey">{ans.score}</span>
             </div>
           </div>
@@ -355,10 +371,10 @@ export function ResultDetail({ me, db, commit, id, go, notify }) {
         <div className="eyebrow">Статус</div>
         <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
           {[["VIEWED", "просмотрен"], ["NEEDS_CONSULT", "нужна консультация"], ["CLOSED", "закрыт"]].map(([k, l]) => (
-            <button key={k} className={"chip" + (a.reviewStatus === k ? " on" : "")} onClick={() => setStatus(k)}>{l}</button>
+            <button key={k} className={"chip" + (a.review_status === k ? " on" : "")} onClick={() => setStatus(k)}>{l}</button>
           ))}
         </div>
-        <button className="btn" onClick={() => setStatus(a.reviewStatus || "VIEWED")}>Сохранить заметку</button>
+        <button className="btn" onClick={() => setStatus(a.review_status || "VIEWED")}>Сохранить заметку</button>
       </div>
     </>
   );

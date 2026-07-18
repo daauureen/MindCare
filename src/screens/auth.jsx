@@ -1,27 +1,29 @@
 import React, { useState } from 'react';
-import { uid, nowISO, code6, CATEGORIES } from '../lib/utils.js';
+import { uid, code6, CATEGORIES } from '../lib/utils.js';
 import { Field, Area, Top } from '../components/common.jsx';
 import { DocUploader } from '../components/documents.jsx';
+import { createStudent, createPsychologist, setVerified, resendCode } from '../lib/db.js';
 
 // Экраны до входа в приложение: приветствие, вход, регистрация, подтверждение почты
 
-export function VerifyEmail({ me, db, commit, logout, notify }) {
+export function VerifyEmail({ me, reload, logout, notify }) {
   const [code, setCode] = useState("");
   const [err, setErr] = useState("");
   const [tries, setTries] = useState(0);
 
-  const confirm = () => {
-    if (code.trim() !== me.emailCode) {
+  const confirm = async () => {
+    if (code.trim() !== me.email_code) {
       setTries(tries + 1);
       return setErr(tries >= 3 ? "Код не совпадает. Запросите новый." : "Код не совпадает");
     }
-    commit({ ...db, users: db.users.map((u) => (u.id === me.id ? { ...u, emailVerifiedAt: nowISO(), emailCode: null } : u)) });
+    await setVerified(me.id);
+    await reload();
     notify("Email подтверждён");
   };
 
-  const resend = () => {
-    const c = code6();
-    commit({ ...db, users: db.users.map((u) => (u.id === me.id ? { ...u, emailCode: c } : u)) });
+  const resend = async () => {
+    await resendCode(me.id);
+    await reload();
     setErr(""); setTries(0);
     notify("Новый код отправлен");
   };
@@ -33,7 +35,7 @@ export function VerifyEmail({ me, db, commit, logout, notify }) {
       <p className="muted">Мы отправили шестизначный код на {me.email}. Введите его, чтобы продолжить.</p>
       <div className="card" style={{ background: "var(--mosslite)", borderColor: "var(--moss)" }}>
         <div className="eyebrow">Прототип · письмо не уходит</div>
-        <p style={{ fontFamily: "Spectral, serif", fontSize: 30, letterSpacing: ".18em", marginTop: 6 }}>{me.emailCode}</p>
+        <p style={{ fontFamily: "Spectral, serif", fontSize: 30, letterSpacing: ".18em", marginTop: 6 }}>{me.email_code}</p>
         <p className="tiny">В рабочей версии код придёт письмом и здесь показываться не будет.</p>
       </div>
       <Field label="Код из письма" value={code} inputMode="numeric" maxLength={6}
@@ -47,7 +49,7 @@ export function VerifyEmail({ me, db, commit, logout, notify }) {
   );
 }
 
-export function Auth({ db, commit, route, go, login, notify }) {
+export function Auth({ db, reload, route, go, login, notify }) {
   const [err, setErr] = useState("");
 
   if (route.n === "welcome")
@@ -74,10 +76,10 @@ export function Auth({ db, commit, route, go, login, notify }) {
     return <LoginScreen go={go} login={login} err={err} setErr={setErr} />;
 
   if (route.n === "reg-student")
-    return <RegStudent db={db} commit={commit} go={go} login={login} />;
+    return <RegStudent db={db} reload={reload} go={go} login={login} />;
 
   if (route.n === "reg-psy")
-    return <RegPsych db={db} commit={commit} go={go} login={login} notify={notify} />;
+    return <RegPsych db={db} reload={reload} go={go} login={login} notify={notify} />;
 
   return null;
 }
@@ -106,22 +108,24 @@ export function LoginScreen({ go, login, err, setErr }) {
   );
 }
 
-export function RegStudent({ db, commit, go, login }) {
+export function RegStudent({ db, reload, go, login }) {
   const [f, setF] = useState({ fullName: "", email: "", password: "" });
   const [agree, setAgree] = useState(false);
   const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const ok = f.fullName.trim().length > 2 && /\S+@\S+\.\S+/.test(f.email) && f.password.length >= 8 && agree;
 
   const submit = async () => {
-    if (db.users.some((u) => u.email.toLowerCase() === f.email.trim().toLowerCase()))
-      return setErr("Такой email уже зарегистрирован");
-    const user = {
-      id: uid(), role: "STUDENT", ...f, email: f.email.trim(), status: "ACTIVE",
-      emailVerifiedAt: null, emailCode: code6(), createdAt: nowISO(),
-    };
-    commit({ ...db, users: [...db.users, user] });
-    await login(f.email, f.password);
+    setBusy(true); setErr("");
+    try {
+      if (db.users.some((u) => u.email.toLowerCase() === f.email.trim().toLowerCase()))
+        return setErr("Такой email уже зарегистрирован");
+      await createStudent(f);
+      await reload();
+      await login(f.email, f.password);
+    } catch (e) { setErr(e.message || "Не удалось создать аккаунт"); }
+    setBusy(false);
   };
 
   return (
@@ -136,18 +140,19 @@ export function RegStudent({ db, commit, go, login }) {
           <span className="tiny">Согласен(на) с политикой конфиденциальности и обработкой данных о моём состоянии</span>
         </button>
         {err && <p className="tiny" style={{ color: "var(--ochre)" }}>{err}</p>}
-        <button className="btn" disabled={!ok} onClick={submit}>Создать аккаунт</button>
+        <button className="btn" disabled={!ok || busy} onClick={submit}>{busy ? "Создаём…" : "Создать аккаунт"}</button>
       </div>
     </>
   );
 }
 
-export function RegPsych({ db, commit, go, login, notify }) {
+export function RegPsych({ db, reload, go, login, notify }) {
   const [step, setStep] = useState(1);
   const [f, setF] = useState({ fullName: "", email: "", phone: "", password: "", education: "", experienceYears: "", about: "" });
   const [specs, setSpecs] = useState([]);
   const [docs, setDocs] = useState([]);
   const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
   const step1ok = f.fullName.trim().length > 2 && /\S+@\S+\.\S+/.test(f.email) && f.password.length >= 8;
@@ -155,19 +160,20 @@ export function RegPsych({ db, commit, go, login, notify }) {
   const step3ok = docs.some((d) => d.type === "DIPLOMA");
 
   const submit = async () => {
-    if (db.users.some((u) => u.email.toLowerCase() === f.email.trim().toLowerCase()))
-      return setErr("Такой email уже зарегистрирован");
-    const user = {
-      id: uid(), role: "PSYCHOLOGIST", fullName: f.fullName, email: f.email.trim(), phone: f.phone,
-      password: f.password, status: "ACTIVE", emailVerifiedAt: null, emailCode: code6(), createdAt: nowISO(),
-      profile: {
-        education: f.education, specializations: specs, experienceYears: Number(f.experienceYears) || 0,
-        about: f.about, verificationStatus: "PENDING", submittedAt: nowISO(), documents: docs, rejectionReason: null,
-      },
-    };
-    commit({ ...db, users: [...db.users, user] });
-    await login(f.email, f.password);
-    notify("Заявка отправлена на проверку");
+    setBusy(true); setErr("");
+    try {
+      if (db.users.some((u) => u.email.toLowerCase() === f.email.trim().toLowerCase()))
+        return setErr("Такой email уже зарегистрирован");
+      await createPsychologist({
+        fullName: f.fullName, email: f.email, phone: f.phone, password: f.password,
+        education: f.education, specializations: specs, experienceYears: f.experienceYears, about: f.about,
+        documents: docs,
+      });
+      await reload();
+      await login(f.email, f.password);
+      notify("Заявка отправлена на проверку");
+    } catch (e) { setErr(e.message || "Не удалось отправить заявку"); }
+    setBusy(false);
   };
 
   return (
@@ -210,7 +216,7 @@ export function RegPsych({ db, commit, go, login, notify }) {
             <DocUploader docs={docs} setDocs={setDocs} />
             {!step3ok && docs.length > 0 && <p className="tiny" style={{ color: "var(--ochre)" }}>Нужен хотя бы один документ с типом «Диплом».</p>}
             {err && <p className="tiny" style={{ color: "var(--ochre)" }}>{err}</p>}
-            <button className="btn" disabled={!step3ok} onClick={submit}>Отправить заявку</button>
+            <button className="btn" disabled={!step3ok || busy} onClick={submit}>{busy ? "Отправляем…" : "Отправить заявку"}</button>
           </>
         )}
       </div>

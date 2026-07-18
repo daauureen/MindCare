@@ -1,8 +1,9 @@
 import React, { useState, useRef } from 'react';
-import { uid, nowISO, kb, MAX_FILE, ALLOWED_MIME, DOC_LABEL } from '../lib/utils.js';
-import { putFile, getFile } from '../lib/storage.js';
+import { uid, kb, MAX_FILE, ALLOWED_MIME, DOC_LABEL } from '../lib/utils.js';
+import { uploadDocument, documentUrl } from '../lib/db.js';
 
-// Загрузка и просмотр документов психолога
+// Загрузка и просмотр документов психолога.
+// Файлы хранятся в приватном бакете Supabase Storage; в БД — только ключ объекта.
 
 export function DocUploader({ docs, setDocs, note }) {
   const [type, setType] = useState("DIPLOMA");
@@ -19,10 +20,8 @@ export function DocUploader({ docs, setDocs, note }) {
     setErr(""); setBusy(true);
     try {
       const id = uid();
-      const data = await readAsDataURL(file);
-      const ok = await putFile(id, data);
-      if (!ok) throw new Error();
-      setDocs([...docs, { id, type, fileName: file.name, mimeType: file.type, size: file.size, uploadedAt: nowISO() }]);
+      await uploadDocument(id, file);
+      setDocs([...docs, { id, type, fileName: file.name, mimeType: file.type, size: file.size, storageKey: id }]);
     } catch { setErr("Не удалось сохранить файл. Попробуйте ещё раз."); }
     setBusy(false);
   };
@@ -57,16 +56,16 @@ export function DocUploader({ docs, setDocs, note }) {
 }
 
 export function DocItem({ doc }) {
-  const [data, setData] = useState(null);
+  const [url, setUrl] = useState(null);
   const [open, setOpen] = useState(false);
   const [err, setErr] = useState("");
 
   const show = async () => {
     if (open) return setOpen(false);
-    if (!data) {
-      const d = await getFile(doc.id);
-      if (!d) { setErr("Файл недоступен (демо-запись без вложения)"); return; }
-      setData(d);
+    if (!url) {
+      const u = await documentUrl(doc.storage_key || doc.storageKey);
+      if (!u) { setErr("Файл недоступен"); return; }
+      setUrl(u);
     }
     setOpen(true);
   };
@@ -75,22 +74,19 @@ export function DocItem({ doc }) {
     <div className="card">
       <div className="between">
         <div style={{ flex: 1, minWidth: 0 }}>
-          <p style={{ fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.fileName}</p>
-          <p className="tiny">{DOC_LABEL[doc.type] || doc.type}{doc.size ? ` · ${kb(doc.size)}` : ""}</p>
+          <p style={{ fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.file_name || doc.fileName}</p>
+          <p className="tiny">{DOC_LABEL[doc.type] || doc.type}{(doc.size_bytes || doc.size) ? ` · ${kb(doc.size_bytes || doc.size)}` : ""}</p>
         </div>
         <button className="btn quiet sm" onClick={show}>{open ? "Свернуть" : "Открыть"}</button>
       </div>
       {err && <p className="tiny" style={{ color: "var(--ochre)", marginTop: 8 }}>{err}</p>}
-      {open && data && (
+      {open && url && (
         <div style={{ marginTop: 12 }}>
-          {doc.mimeType === "application/pdf" ? (
-            <iframe title={doc.fileName} src={data} style={{ width: "100%", height: 420, border: "1px solid var(--line)" }} />
+          {(doc.mime_type || doc.mimeType) === "application/pdf" ? (
+            <iframe title={doc.file_name || doc.fileName} src={url} style={{ width: "100%", height: 420, border: "1px solid var(--line)" }} />
           ) : (
-            <img alt={doc.fileName} src={data} style={{ width: "100%", border: "1px solid var(--line)" }} />
+            <img alt={doc.file_name || doc.fileName} src={url} style={{ width: "100%", border: "1px solid var(--line)" }} />
           )}
-          <a href={data} download={doc.fileName} className="tiny" style={{ display: "inline-block", marginTop: 8, color: "var(--moss)" }}>
-            Скачать файл
-          </a>
         </div>
       )}
     </div>
