@@ -65,7 +65,7 @@ BEGIN
   IF FOUND THEN RETURN; END IF;
 
   INSERT INTO users (id, email, password, role, full_name, phone, status, email_verified_at)
-  VALUES (gen_random_uuid(), 'marzhan@gmail.kz', '1234', 'ADMIN', 'Маржан Омар', '+7 777 777 77 77', 'ACTIVE', now_ts)
+  VALUES (gen_random_uuid(), 'marzhan@gmail.kz', '1234', 'PSYCHOLOGIST', 'Маржан Омар', '+7 777 777 77 77', 'ACTIVE', now_ts)
   RETURNING id INTO psy_a;
   INSERT INTO psychologist_profiles (user_id, education, specializations, experience_years, about, verification_status, verified_at, verified_by, submitted_at)
   VALUES (psy_a, 'Astana IT University, software engineering, professor', ARRAY['Стресс','Учёба и выгорание'], 7,
